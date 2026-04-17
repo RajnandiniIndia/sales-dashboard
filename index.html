@@ -10,23 +10,52 @@
 </head>
 <body>
 
+  <!-- TOPBAR -->
   <div class="topbar">
     <div class="topbar-left">
       <div class="logo-mark"></div>
-      <span class="brand">SalesView</span>
+      <div>
+        <span class="brand">Rajnandini Fashion</span>
+        <span class="brand-sub">Sales Dashboard</span>
+      </div>
     </div>
     <div class="topbar-right">
-      <span class="last-updated" id="lastUpdated">Loading...</span>
-      <button class="refresh-btn" onclick="loadData()">&#8635; Refresh</button>
+      <span class="last-updated" id="lastUpdated">Loading…</span>
+      <button class="refresh-btn" onclick="loadData()">↺ Refresh</button>
     </div>
   </div>
 
-  <main class="container">
-
-    <div class="page-header">
-      <h1>Revenue Dashboard</h1>
-      <p class="subtitle">Live data from Google Sheets</p>
+  <!-- GLOBAL FILTER BAR -->
+  <div class="filter-bar" id="filterBar">
+    <div class="filter-group">
+      <label>Master Channel</label>
+      <select id="fMaster" onchange="applyFilters()"><option value="">All</option></select>
     </div>
+    <div class="filter-group">
+      <label>Channel</label>
+      <select id="fChannel" onchange="applyFilters()"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Category</label>
+      <select id="fCategory" onchange="applyFilters()"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Month</label>
+      <select id="fMonth" onchange="applyFilters()"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Last 30 Days</label>
+      <select id="fLast30" onchange="applyFilters()">
+        <option value="">All</option>
+        <option value="true">Active</option>
+        <option value="false">Inactive</option>
+      </select>
+    </div>
+    <button class="clear-btn" onclick="clearFilters()">✕ Clear</button>
+    <span class="filter-count" id="filterCount"></span>
+  </div>
+
+  <main class="container">
 
     <!-- KPI Cards -->
     <div class="kpi-grid" id="kpiGrid">
@@ -34,75 +63,87 @@
       <div class="kpi-card skeleton"></div>
       <div class="kpi-card skeleton"></div>
       <div class="kpi-card skeleton"></div>
+      <div class="kpi-card skeleton"></div>
     </div>
 
-    <!-- Charts Row -->
-    <div class="charts-row">
-      <div class="chart-card wide">
-        <div class="chart-header">
-          <h2>Revenue Over Time</h2>
-          <div class="chart-legend" id="revLegend"></div>
-        </div>
-        <div class="chart-wrap" style="height:280px;">
-          <canvas id="revenueChart" role="img" aria-label="Revenue trend over time">Loading chart...</canvas>
+    <!-- Charts Row 1 -->
+    <div class="charts-row two-one">
+      <div class="chart-card">
+        <div class="chart-header"><h2>Sales by Month</h2></div>
+        <div class="chart-wrap" style="height:260px;">
+          <canvas id="monthChart" role="img" aria-label="Monthly sales bar chart">Loading…</canvas>
         </div>
       </div>
       <div class="chart-card">
-        <div class="chart-header">
-          <h2>Sales by Category</h2>
-        </div>
-        <div class="chart-wrap" style="height:280px;">
-          <canvas id="categoryChart" role="img" aria-label="Sales breakdown by category">Loading chart...</canvas>
+        <div class="chart-header"><h2>Sales by Master Channel</h2></div>
+        <div class="chart-wrap" style="height:260px;">
+          <canvas id="masterChart" role="img" aria-label="Sales by master channel doughnut">Loading…</canvas>
         </div>
       </div>
     </div>
 
-    <!-- Second Charts Row -->
-    <div class="charts-row">
+    <!-- Charts Row 2 -->
+    <div class="charts-row two-one">
       <div class="chart-card">
-        <div class="chart-header">
-          <h2>Monthly Comparison</h2>
-        </div>
-        <div class="chart-wrap" style="height:240px;">
-          <canvas id="barChart" role="img" aria-label="Monthly revenue bar chart">Loading chart...</canvas>
+        <div class="chart-header"><h2>Top Categories</h2></div>
+        <div class="chart-wrap" id="catWrap" style="height:300px;">
+          <canvas id="catChart" role="img" aria-label="Top categories horizontal bar">Loading…</canvas>
         </div>
       </div>
-      <div class="chart-card wide">
-        <div class="chart-header">
-          <h2>Top Performers</h2>
-        </div>
-        <div class="chart-wrap" style="height:240px;">
-          <canvas id="topChart" role="img" aria-label="Top performing items horizontal bar chart">Loading chart...</canvas>
+      <div class="chart-card">
+        <div class="chart-header"><h2>Sales vs Returns by Channel</h2></div>
+        <div class="chart-wrap" style="height:300px;">
+          <canvas id="svrChart" role="img" aria-label="Sales vs returns grouped bar">Loading…</canvas>
         </div>
       </div>
     </div>
 
-    <!-- Data Table -->
+    <!-- DATA TABLE -->
     <div class="table-card">
       <div class="table-header">
-        <h2>All Records</h2>
+        <h2>All Records <span class="rec-badge" id="recBadge"></span></h2>
         <div class="table-controls">
-          <input type="text" id="searchInput" placeholder="Search..." oninput="filterTable()" />
-          <select id="colFilter" onchange="filterTable()">
-            <option value="">All columns</option>
+          <input type="text" id="searchInput" placeholder="🔍 Search all columns…" oninput="renderTable()" />
+          <select id="tSortCol" onchange="renderTable()">
+            <option value="">Sort by…</option>
+          </select>
+          <select id="tSortDir" onchange="renderTable()">
+            <option value="asc">↑ Ascending</option>
+            <option value="desc">↓ Descending</option>
+          </select>
+          <select id="tPageSize" onchange="renderTable()">
+            <option value="50">50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="250">250 rows</option>
+            <option value="500">500 rows</option>
+            <option value="9999">All</option>
           </select>
         </div>
       </div>
+
+      <!-- Column visibility -->
+      <div class="col-toggle" id="colToggle"></div>
+
       <div class="table-wrap">
         <table id="dataTable">
           <thead id="tableHead"></thead>
           <tbody id="tableBody"></tbody>
         </table>
-        <div class="empty-state" id="emptyState" style="display:none;">No records match your search.</div>
+        <div class="empty-state" id="emptyState" style="display:none;">No records match your filters.</div>
       </div>
-      <div class="table-footer" id="tableFooter"></div>
+
+      <!-- Pagination -->
+      <div class="table-footer">
+        <span id="tableFooter"></span>
+        <div class="pagination" id="pagination"></div>
+      </div>
     </div>
 
   </main>
 
   <footer class="footer">
-    <span>Data source: <a id="sheetLink" href="#" target="_blank">Google Sheets</a></span>
-    <span>Built with SalesView</span>
+    <span>Live data · <a id="sheetLink" href="#" target="_blank">Google Sheets</a></span>
+    <span>Rajnandini Fashion &copy; 2025</span>
   </footer>
 
   <script src="config.js"></script>

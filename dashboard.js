@@ -1,267 +1,215 @@
-// dashboard.js — Core logic
+// dashboard.js — Rajnandini Fashion Sales Dashboard
 
-let allRows = [], headers = [], charts = {};
-let colMap = {};
+// ── State ─────────────────────────────────────────────────────
+let allRows    = [];   // raw data
+let filtered   = [];   // after global filters
+let charts     = {};
+let visibleCols = [];  // columns shown in table
+let sortCol    = "";
+let sortDir    = "asc";
+let currentPage = 1;
 
-// ── Colour palette ────────────────────────────────────────────
 const COLORS = [
   "#2563EB","#16A34A","#D97706","#DC2626",
   "#7C3AED","#0891B2","#BE185D","#65A30D",
-  "#EA580C","#4338CA","#0D9488","#B45309"
+  "#EA580C","#4338CA","#0D9488","#9333EA"
 ];
 
-// ── Entry point ───────────────────────────────────────────────
+// ── Exact column names ────────────────────────────────────────
+const C = () => CONFIG; // shorthand
+
+// ── Load data ─────────────────────────────────────────────────
 async function loadData() {
-  showSkeletons(true);
-  setStatus("Fetching data…");
+  setStatus("Fetching…");
   try {
-    const res = await fetch(CONFIG.CSV_URL + "&t=" + Date.now());
+    const res  = await fetch(C().CSV_URL + "&t=" + Date.now());
     if (!res.ok) throw new Error("HTTP " + res.status);
     const text = await res.text();
     const parsed = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: true });
-    headers = parsed.meta.fields || [];
+
     allRows = parsed.data;
-    buildColMap();
-    renderAll();
+    visibleCols = parsed.meta.fields || [];
+
+    buildFilterOptions();
+    buildColToggle();
+    buildSortSelect();
+    applyFilters();
+
     setStatus("Updated " + new Date().toLocaleTimeString());
-    document.getElementById("sheetLink").href = CONFIG.CSV_URL;
-    document.title = CONFIG.TITLE;
+    document.getElementById("sheetLink").href = C().CSV_URL;
+    document.title = C().TITLE;
   } catch(e) {
-    setStatus("⚠ Could not load data — check CONFIG.CSV_URL");
+    setStatus("⚠ Load failed — check CSV_URL in config.js");
     console.error(e);
   }
-  showSkeletons(false);
 }
 
-// ── Auto-detect columns ───────────────────────────────────────
-function buildColMap() {
-  const c = CONFIG;
-  colMap = {
-    date:     c.DATE_COL     || autoFind("date",     ["date","month","year","period","week","day","time","created"]),
-    revenue:  c.REVENUE_COL  || autoFind("revenue",  ["revenue","sales","amount","total","value","income","price","gmv","net","gross"]),
-    category: c.CATEGORY_COL || autoFind("category", ["category","type","segment","region","channel","product","group","dept","division"]),
-    name:     c.NAME_COL     || autoFind("name",     ["name","product","item","sku","title","description","label"]),
-    quantity: c.QUANTITY_COL || autoFind("quantity", ["quantity","qty","units","count","volume","orders","transactions"]),
-  };
+// ── Build dropdown options from unique values ─────────────────
+function buildFilterOptions() {
+  populateSelect("fMaster",   uniqueVals(C().MASTER_COL));
+  populateSelect("fChannel",  uniqueVals(C().CHANNEL_COL));
+  populateSelect("fCategory", uniqueVals(C().CATEGORY_COL));
+  populateSelect("fMonth",    uniqueVals(C().MONTH_COL, true));
 }
 
-function autoFind(key, keywords) {
-  if (!CONFIG.AUTO_DETECT) return null;
-  for (const h of headers) {
-    const l = h.toLowerCase();
-    if (keywords.some(k => l.includes(k))) return h;
-  }
-  // fallback: first numeric column for revenue/quantity
-  if (key === "revenue" || key === "quantity") {
-    return headers.find(h => typeof allRows[0]?.[h] === "number") || null;
-  }
-  return null;
+function uniqueVals(col, sorted) {
+  const s = new Set(allRows.map(r => String(r[col] ?? "")).filter(Boolean));
+  const arr = [...s];
+  return sorted ? arr.sort() : arr.sort();
 }
 
-// ── Render everything ─────────────────────────────────────────
-function renderAll() {
+function populateSelect(id, vals) {
+  const sel = document.getElementById(id);
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All</option>' +
+    vals.map(v => `<option value="${v}"${v===cur?' selected':''}>${v}</option>`).join("");
+}
+
+// ── Apply all global filters → rebuild charts & table ─────────
+function applyFilters() {
+  const master   = document.getElementById("fMaster").value;
+  const channel  = document.getElementById("fChannel").value;
+  const category = document.getElementById("fCategory").value;
+  const month    = document.getElementById("fMonth").value;
+  const last30   = document.getElementById("fLast30").value;
+
+  filtered = allRows.filter(r => {
+    if (master   && String(r[C().MASTER_COL]   ?? "") !== master)   return false;
+    if (channel  && String(r[C().CHANNEL_COL]  ?? "") !== channel)  return false;
+    if (category && String(r[C().CATEGORY_COL] ?? "") !== category) return false;
+    if (month    && String(r[C().MONTH_COL]    ?? "") !== month)    return false;
+    if (last30) {
+      const v = String(r[C().LAST30_COL] ?? "").toLowerCase();
+      if (last30 === "true"  && v !== "true")  return false;
+      if (last30 === "false" && v !== "false") return false;
+    }
+    return true;
+  });
+
+  const activeFilters = [master, channel, category, month, last30].filter(Boolean).length;
+  document.getElementById("filterCount").textContent =
+    activeFilters ? `${activeFilters} filter${activeFilters>1?"s":""} · ${filtered.length.toLocaleString()} rows` : "";
+
   renderKPIs();
-  renderRevenueChart();
-  renderCategoryChart();
-  renderBarChart();
-  renderTopChart();
+  renderMonthChart();
+  renderMasterChart();
+  renderCatChart();
+  renderSvRChart();
+  currentPage = 1;
   renderTable();
-  buildColFilterSelect();
+}
+
+function clearFilters() {
+  ["fMaster","fChannel","fCategory","fMonth","fLast30"].forEach(id => {
+    document.getElementById(id).value = "";
+  });
+  applyFilters();
 }
 
 // ── KPI Cards ─────────────────────────────────────────────────
 function renderKPIs() {
-  const grid = document.getElementById("kpiGrid");
-  const rev = colMap.revenue;
-  const qty = colMap.quantity;
-
-  const total    = rev ? sum(allRows, rev) : null;
-  const count    = allRows.length;
-  const avgOrder = (rev && count) ? total / count : null;
-  const totalQty = qty ? sum(allRows, qty) : null;
+  const rows   = filtered;
+  const sales  = sumCol(rows, C().SALE_COL);
+  const rets   = sumCol(rows, C().RETURN_COL);
+  const net    = sales - rets;
+  const retPct = sales > 0 ? ((rets/sales)*100).toFixed(1) : "0.0";
+  const masters = new Set(rows.map(r => r[C().MASTER_COL])).size;
+  const skus    = new Set(rows.map(r => r[C().CHAN_SKU_COL])).size;
 
   const cards = [
-    { label: "Total Revenue",   value: total    != null ? fmt(total)           : count + " rows",  delta: null },
-    { label: "Total Orders",    value: count,                                                       delta: null },
-    { label: "Avg Order Value", value: avgOrder != null ? fmt(avgOrder)        : "—",              delta: null },
-    { label: "Total Units Sold",value: totalQty != null ? totalQty.toLocaleString() : "—",         delta: null },
+    { label: "Total Sales (Units)", value: sales.toLocaleString(),        color: "blue"   },
+    { label: "Total Returns",        value: rets.toLocaleString(),         color: "red"    },
+    { label: "Net Units",            value: net.toLocaleString(),          color: "green"  },
+    { label: "Return Rate",          value: retPct + "%",                  color: "amber"  },
+    { label: "Unique SKUs",          value: skus.toLocaleString(),         color: "purple" },
   ];
 
-  grid.innerHTML = cards.map(c => `
-    <div class="kpi-card">
+  document.getElementById("kpiGrid").innerHTML = cards.map(c => `
+    <div class="kpi-card kpi-${c.color}">
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value}</div>
     </div>
   `).join("");
 }
 
-// ── Revenue over time (line chart) ───────────────────────────
-function renderRevenueChart() {
-  if (charts.revenue) { charts.revenue.destroy(); }
-  const ctx = document.getElementById("revenueChart").getContext("2d");
+// ── Month Sales Bar Chart ─────────────────────────────────────
+function renderMonthChart() {
+  if (charts.month) { charts.month.destroy(); }
+  const ctx = document.getElementById("monthChart").getContext("2d");
 
-  if (!colMap.date || !colMap.revenue) {
-    // fallback: just plot raw revenue values
-    const vals = allRows.slice(0, 50).map(r => r[colMap.revenue] || 0);
-    const labels = vals.map((_, i) => "Row " + (i+1));
-    charts.revenue = makeLineChart(ctx, labels, vals);
-    return;
-  }
+  const groups = groupSum(filtered, C().MONTH_COL, C().SALE_COL);
+  const labels = Object.keys(groups).sort((a,b) => monthOrder(a) - monthOrder(b));
+  const vals   = labels.map(k => groups[k]);
 
-  // Group by date
-  const groups = {};
-  allRows.forEach(r => {
-    const d = r[colMap.date];
-    if (!d) return;
-    const key = String(d).substring(0, 7); // YYYY-MM
-    groups[key] = (groups[key] || 0) + (r[colMap.revenue] || 0);
-  });
-  const sorted = Object.keys(groups).sort();
-  const vals   = sorted.map(k => groups[k]);
-  charts.revenue = makeLineChart(ctx, sorted, vals);
-}
-
-function makeLineChart(ctx, labels, data) {
-  return new Chart(ctx, {
-    type: "line",
+  charts.month = new Chart(ctx, {
+    type: "bar",
     data: {
       labels,
       datasets: [{
-        label: "Revenue",
-        data,
-        borderColor: "#2563EB",
-        backgroundColor: "rgba(37,99,235,0.08)",
-        borderWidth: 2.5,
-        pointRadius: data.length < 30 ? 4 : 0,
-        pointBackgroundColor: "#2563EB",
-        tension: 0.35,
-        fill: true,
+        label: "Sales",
+        data: vals,
+        backgroundColor: labels.map((_, i) => COLORS[i % COLORS.length]),
+        borderRadius: 5,
+        borderSkipped: false,
       }]
     },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: "#888", font: { size: 11 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
-        y: { ticks: { color: "#888", font: { size: 11 }, callback: v => CONFIG.CURRENCY + compactNum(v) }, grid: { color: "rgba(0,0,0,0.05)" } }
-      }
-    }
+    options: stdOpts({ xLabel: false, yCallback: v => v.toLocaleString() })
   });
 }
 
-// ── Category breakdown (doughnut) ───────────────────────────
-function renderCategoryChart() {
-  if (charts.category) { charts.category.destroy(); }
-  const ctx = document.getElementById("categoryChart").getContext("2d");
+function monthOrder(m) {
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const [mon, yr] = m.split("-");
+  const mi = months.findIndex(x => m.startsWith(x));
+  if (mi >= 0) return parseInt(yr || "0") * 12 + mi;
+  return 0;
+}
 
-  const col = colMap.category || colMap.name;
-  if (!col) {
-    ctx.canvas.parentElement.innerHTML = '<p class="no-data">No category column detected.</p>';
-    return;
-  }
+// ── Master Channel Doughnut ───────────────────────────────────
+function renderMasterChart() {
+  if (charts.master) { charts.master.destroy(); }
+  const ctx = document.getElementById("masterChart").getContext("2d");
 
-  const groups = {};
-  allRows.forEach(r => {
-    const k = r[col] || "Other";
-    groups[k] = (groups[k] || 0) + (colMap.revenue ? (r[colMap.revenue] || 0) : 1);
-  });
-  const sorted = Object.entries(groups).sort((a,b) => b[1]-a[1]).slice(0, 10);
-  const labels = sorted.map(x => x[0]);
-  const vals   = sorted.map(x => x[1]);
+  const groups = groupSum(filtered, C().MASTER_COL, C().SALE_COL);
+  const sorted = Object.entries(groups).sort((a,b)=>b[1]-a[1]);
+  const labels = sorted.map(x=>x[0]);
+  const vals   = sorted.map(x=>x[1]);
 
-  charts.category = new Chart(ctx, {
+  charts.master = new Chart(ctx, {
     type: "doughnut",
     data: {
       labels,
-      datasets: [{ data: vals, backgroundColor: COLORS.slice(0,labels.length), borderWidth: 2, borderColor: "#fff" }]
+      datasets: [{ data: vals, backgroundColor: COLORS.slice(0,labels.length), borderWidth: 2, borderColor:"#fff" }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: { position: "right", labels: { font: { size: 11 }, color: "#555", boxWidth: 12, padding: 10 } }
+        legend: { position: "right", labels: { font:{size:11}, color:"#555", boxWidth:12, padding:8 } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed.toLocaleString()}` } }
       }
     }
   });
 }
 
-// ── Monthly bar chart ─────────────────────────────────────────
-function renderBarChart() {
-  if (charts.bar) { charts.bar.destroy(); }
-  const ctx = document.getElementById("barChart").getContext("2d");
+// ── Top Categories Horizontal Bar ────────────────────────────
+function renderCatChart() {
+  if (charts.cat) { charts.cat.destroy(); }
+  const ctx = document.getElementById("catChart").getContext("2d");
 
-  if (!colMap.date || !colMap.revenue) {
-    const col = colMap.revenue || headers.find(h => typeof allRows[0]?.[h] === "number");
-    if (!col) { ctx.canvas.parentElement.innerHTML = '<p class="no-data">No numeric column detected.</p>'; return; }
-    const vals   = allRows.slice(0, 12).map(r => r[col] || 0);
-    const labels = vals.map((_, i) => "Row " + (i+1));
-    makeBarChart(ctx, labels, vals);
-    return;
-  }
+  const groups = groupSum(filtered, C().CATEGORY_COL, C().SALE_COL);
+  const top    = Object.entries(groups).sort((a,b)=>b[1]-a[1]).slice(0, C().TOP_N);
+  const labels = top.map(x=>x[0]);
+  const vals   = top.map(x=>x[1]);
 
-  const groups = {};
-  allRows.forEach(r => {
-    const d = r[colMap.date];
-    if (!d) return;
-    const key = String(d).substring(0, 7);
-    groups[key] = (groups[key] || 0) + (r[colMap.revenue] || 0);
-  });
-  const sorted = Object.keys(groups).sort().slice(-12);
-  makeBarChart(ctx, sorted, sorted.map(k => groups[k]));
-}
+  const h = Math.max(260, labels.length * 36 + 40);
+  document.getElementById("catWrap").style.height = h + "px";
 
-function makeBarChart(ctx, labels, data) {
-  charts.bar = new Chart(ctx, {
+  charts.cat = new Chart(ctx, {
     type: "bar",
     data: {
       labels,
       datasets: [{
-        label: "Revenue",
-        data,
-        backgroundColor: "rgba(37,99,235,0.75)",
-        borderRadius: 4,
-        borderSkipped: false,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: "#888", font: { size: 11 }, autoSkip: false, maxRotation: 45 } },
-        y: { ticks: { color: "#888", font: { size: 11 }, callback: v => CONFIG.CURRENCY + compactNum(v) }, grid: { color: "rgba(0,0,0,0.05)" } }
-      }
-    }
-  });
-}
-
-// ── Top performers (horizontal bar) ──────────────────────────
-function renderTopChart() {
-  if (charts.top) { charts.top.destroy(); }
-  const ctx = document.getElementById("topChart").getContext("2d");
-
-  const col = colMap.name || colMap.category;
-  if (!col || !colMap.revenue) {
-    ctx.canvas.parentElement.innerHTML = '<p class="no-data">Need a name/category and revenue column.</p>';
-    return;
-  }
-
-  const groups = {};
-  allRows.forEach(r => {
-    const k = r[col] || "Unknown";
-    groups[k] = (groups[k] || 0) + (r[colMap.revenue] || 0);
-  });
-  const top = Object.entries(groups).sort((a,b)=>b[1]-a[1]).slice(0, CONFIG.TOP_N);
-  const labels = top.map(x => x[0]);
-  const vals   = top.map(x => x[1]);
-
-  const wrapH = Math.max(200, labels.length * 38 + 40);
-  ctx.canvas.parentElement.style.height = wrapH + "px";
-
-  charts.top = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [{
-        label: "Revenue",
+        label: "Sales",
         data: vals,
         backgroundColor: COLORS.slice(0, labels.length),
         borderRadius: 3,
@@ -271,76 +219,207 @@ function renderTopChart() {
     options: {
       indexAxis: "y",
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: c => ` ${c.parsed.x.toLocaleString()} units` } }
+      },
       scales: {
-        x: { ticks: { color: "#888", font: { size: 11 }, callback: v => CONFIG.CURRENCY + compactNum(v) }, grid: { color: "rgba(0,0,0,0.05)" } },
-        y: { ticks: { color: "#444", font: { size: 12 } } }
+        x: { ticks: { color:"#888", font:{size:11}, callback: v => v.toLocaleString() }, grid:{ color:"rgba(0,0,0,0.05)" } },
+        y: { ticks: { color:"#333", font:{size:12} } }
       }
     }
   });
 }
 
-// ── Data table ────────────────────────────────────────────────
-let filteredRows = [];
+// ── Sales vs Returns by Master Channel ───────────────────────
+function renderSvRChart() {
+  if (charts.svr) { charts.svr.destroy(); }
+  const ctx = document.getElementById("svrChart").getContext("2d");
 
-function renderTable() {
-  filteredRows = allRows.slice(0, CONFIG.MAX_TABLE_ROWS);
+  const salesG  = groupSum(filtered, C().MASTER_COL, C().SALE_COL);
+  const returnG = groupSum(filtered, C().MASTER_COL, C().RETURN_COL);
+  const labels  = Object.keys(salesG).sort((a,b) => salesG[b] - salesG[a]).slice(0,8);
 
-  const head = document.getElementById("tableHead");
-  head.innerHTML = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
-
-  renderTableBody(filteredRows);
+  charts.svr = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "Sales",   data: labels.map(k=>salesG[k]||0),  backgroundColor:"rgba(37,99,235,0.8)",  borderRadius:3, borderSkipped:false },
+        { label: "Returns", data: labels.map(k=>returnG[k]||0), backgroundColor:"rgba(220,38,38,0.75)", borderRadius:3, borderSkipped:false },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position:"top", labels:{font:{size:12},color:"#555",boxWidth:12} } },
+      scales: {
+        x: { ticks:{color:"#888",font:{size:11},maxRotation:30} },
+        y: { ticks:{color:"#888",font:{size:11}, callback: v=>v.toLocaleString()}, grid:{color:"rgba(0,0,0,0.05)"} }
+      }
+    }
+  });
 }
 
-function renderTableBody(rows) {
-  const body = document.getElementById("tableBody");
-  const empty = document.getElementById("emptyState");
-  const footer = document.getElementById("tableFooter");
+// ── Column Toggle ─────────────────────────────────────────────
+const HEADERS = ["MONTH","DATE","Channel Name","Category","Channel SKU","Uniwere SKU","SALE","RETURN","LAST 30 DAYS","MASTER Channel Name"];
 
-  if (!rows.length) {
+function buildColToggle() {
+  visibleCols = [...HEADERS];
+  const wrap = document.getElementById("colToggle");
+  wrap.innerHTML = "<span class='col-toggle-label'>Show columns:</span>" +
+    HEADERS.map(h => `
+      <label class="col-pill">
+        <input type="checkbox" checked onchange="toggleCol('${h}', this.checked)" />
+        ${h}
+      </label>
+    `).join("");
+}
+
+function toggleCol(col, show) {
+  if (show) { if (!visibleCols.includes(col)) visibleCols.push(col); }
+  else       { visibleCols = visibleCols.filter(c => c !== col); }
+  renderTable();
+}
+
+// ── Sort select ───────────────────────────────────────────────
+function buildSortSelect() {
+  const sel = document.getElementById("tSortCol");
+  sel.innerHTML = '<option value="">Sort by…</option>' +
+    HEADERS.map(h => `<option value="${h}">${h}</option>`).join("");
+}
+
+// ── Table render ──────────────────────────────────────────────
+function renderTable() {
+  const q       = (document.getElementById("searchInput").value || "").toLowerCase();
+  const pageSize = parseInt(document.getElementById("tPageSize").value) || 50;
+  sortCol = document.getElementById("tSortCol").value;
+  sortDir = document.getElementById("tSortDir").value;
+
+  // search
+  let rows = q
+    ? filtered.filter(r => visibleCols.some(h => String(r[h]??"").toLowerCase().includes(q)))
+    : [...filtered];
+
+  // sort
+  if (sortCol) {
+    rows.sort((a, b) => {
+      const av = a[sortCol] ?? "";
+      const bv = b[sortCol] ?? "";
+      const cmp = typeof av === "number" && typeof bv === "number"
+        ? av - bv
+        : String(av).localeCompare(String(bv), undefined, {numeric:true});
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+
+  const start = (currentPage - 1) * pageSize;
+  const page  = rows.slice(start, start + pageSize);
+
+  // header
+  document.getElementById("tableHead").innerHTML =
+    "<tr>" + visibleCols.map(h =>
+      `<th class="sortable" onclick="sortBy('${h}')">${h}${sortCol===h ? (sortDir==='asc'?' ↑':' ↓'):''}</th>`
+    ).join("") + "</tr>";
+
+  // body
+  const body  = document.getElementById("tableBody");
+  const empty = document.getElementById("emptyState");
+  if (!page.length) {
     body.innerHTML = "";
     empty.style.display = "block";
-    footer.textContent = "";
-    return;
+  } else {
+    empty.style.display = "none";
+    body.innerHTML = page.map(r =>
+      "<tr>" + visibleCols.map(h => {
+        const v = r[h] ?? "";
+        // colour SALE/RETURN cells
+        if (h === C().SALE_COL   && v > 0) return `<td class="cell-sale">${v}</td>`;
+        if (h === C().RETURN_COL && v > 0) return `<td class="cell-ret">${v}</td>`;
+        if (h === C().LAST30_COL) {
+          const cls = String(v).toLowerCase() === "true" ? "badge-yes" : "badge-no";
+          return `<td><span class="${cls}">${v}</span></td>`;
+        }
+        return `<td>${v}</td>`;
+      }).join("") + "</tr>"
+    ).join("");
   }
-  empty.style.display = "none";
-  body.innerHTML = rows.map(r =>
-    "<tr>" + headers.map(h => `<td>${r[h] ?? ""}</td>`).join("") + "</tr>"
-  ).join("");
-  footer.textContent = rows.length.toLocaleString() + " of " + allRows.length.toLocaleString() + " records";
+
+  document.getElementById("recBadge").textContent = total.toLocaleString();
+  document.getElementById("tableFooter").textContent =
+    `Showing ${(start+1).toLocaleString()}–${Math.min(start+pageSize,total).toLocaleString()} of ${total.toLocaleString()} records`;
+
+  renderPagination(totalPages);
 }
 
-function filterTable() {
-  const q   = document.getElementById("searchInput").value.toLowerCase();
-  const col = document.getElementById("colFilter").value;
+function sortBy(col) {
+  if (sortCol === col) {
+    sortDir = sortDir === "asc" ? "desc" : "asc";
+  } else {
+    sortCol = col;
+    sortDir = "asc";
+  }
+  document.getElementById("tSortCol").value = sortCol;
+  document.getElementById("tSortDir").value = sortDir;
+  renderTable();
+}
 
-  const filtered = allRows.filter(r => {
-    if (!q) return true;
-    const checkCols = col ? [col] : headers;
-    return checkCols.some(h => String(r[h] ?? "").toLowerCase().includes(q));
+// ── Pagination ────────────────────────────────────────────────
+function renderPagination(totalPages) {
+  const pag = document.getElementById("pagination");
+  if (totalPages <= 1) { pag.innerHTML = ""; return; }
+
+  let html = `<button onclick="goPage(${currentPage-1})" ${currentPage===1?"disabled":""}>‹</button>`;
+  const range = pageRange(currentPage, totalPages);
+  range.forEach(p => {
+    if (p === "…") html += `<span class="pag-dot">…</span>`;
+    else html += `<button class="${p===currentPage?'pag-active':''}" onclick="goPage(${p})">${p}</button>`;
   });
-  renderTableBody(filtered.slice(0, CONFIG.MAX_TABLE_ROWS));
+  html += `<button onclick="goPage(${currentPage+1})" ${currentPage===totalPages?"disabled":""}>›</button>`;
+  pag.innerHTML = html;
 }
 
-function buildColFilterSelect() {
-  const sel = document.getElementById("colFilter");
-  sel.innerHTML = '<option value="">All columns</option>' +
-    headers.map(h => `<option value="${h}">${h}</option>`).join("");
+function pageRange(cur, total) {
+  if (total <= 7) return Array.from({length:total},(_,i)=>i+1);
+  if (cur <= 4)   return [1,2,3,4,5,"…",total];
+  if (cur >= total-3) return [1,"…",total-4,total-3,total-2,total-1,total];
+  return [1,"…",cur-1,cur,cur+1,"…",total];
+}
+
+function goPage(p) {
+  const pageSize = parseInt(document.getElementById("tPageSize").value) || 50;
+  const total = parseInt(document.getElementById("recBadge").textContent.replace(/,/g,"")) || 1;
+  const maxP  = Math.ceil(total/pageSize);
+  currentPage = Math.max(1, Math.min(p, maxP));
+  renderTable();
 }
 
 // ── Helpers ───────────────────────────────────────────────────
-function sum(rows, col) { return rows.reduce((a,r) => a + (Number(r[col]) || 0), 0); }
-function fmt(n) { return CONFIG.CURRENCY + Math.round(n).toLocaleString("en-IN"); }
-function compactNum(n) {
-  if (n >= 1e7) return (n/1e7).toFixed(1) + "Cr";
-  if (n >= 1e5) return (n/1e5).toFixed(1) + "L";
-  if (n >= 1e3) return (n/1e3).toFixed(1) + "K";
-  return n;
+function sumCol(rows, col) { return rows.reduce((a,r) => a + (Number(r[col])||0), 0); }
+
+function groupSum(rows, groupCol, sumColName) {
+  const g = {};
+  rows.forEach(r => {
+    const k = String(r[groupCol] ?? "Other");
+    g[k] = (g[k]||0) + (Number(r[sumColName])||0);
+  });
+  return g;
 }
+
+function stdOpts({ yCallback }) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color:"#888", font:{size:11}, maxRotation:40 } },
+      y: { ticks: { color:"#888", font:{size:11}, callback: yCallback }, grid:{ color:"rgba(0,0,0,0.05)" } }
+    }
+  };
+}
+
 function setStatus(msg) { document.getElementById("lastUpdated").textContent = msg; }
-function showSkeletons(show) {
-  document.querySelectorAll(".kpi-card.skeleton").forEach(el => el.style.display = show ? "block" : "none");
-}
 
 // ── Init ──────────────────────────────────────────────────────
 loadData();
